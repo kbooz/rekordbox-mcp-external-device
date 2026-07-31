@@ -1009,6 +1009,108 @@ async def search_device_tracks(
     return [track.model_dump() for track in device.search(query, limit)]
 
 
+@mcp.tool(
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+    }
+)
+async def create_device_playlist(
+    name: str,
+    parent_id: Optional[str] = None,
+    is_folder: bool = False,
+    device_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Create a playlist or folder directly on a connected device.
+
+    ⚠️ CAUTION: This modifies the export on your USB stick / SD card. A
+    timestamped backup (export_backup_*.pdb) is written next to export.pdb first,
+    and the change is rolled back automatically if the result won't parse.
+
+    Note: rekordbox overwrites the whole export the next time you sync this
+    device, so changes made here are lost on the next export from rekordbox.
+
+    Args:
+        name: Playlist or folder name
+        parent_id: Parent folder ID (omit for top level)
+        is_folder: Create a folder instead of a playlist
+        device_path: Device mount point. Optional when exactly one device is connected.
+
+    Returns:
+        The new playlist ID and the path of the backup that was taken
+    """
+    device = await _open_device(device_path)
+    return await asyncio.to_thread(device.create_playlist, name, parent_id, is_folder)
+
+
+@mcp.tool(
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+    }
+)
+async def add_tracks_to_device_playlist(
+    playlist_id: str, track_ids: List[str], device_path: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Append tracks to a playlist on a connected device.
+
+    Tracks must already exist on the device -- this links existing tracks into a
+    playlist, it does not copy audio files onto the stick.
+
+    ⚠️ CAUTION: This modifies the export on your USB stick / SD card. A
+    timestamped backup is written next to export.pdb first.
+
+    Args:
+        playlist_id: Target playlist ID (from get_device_playlists)
+        track_ids: Track IDs to append, in the order they should appear
+        device_path: Device mount point. Optional when exactly one device is connected.
+
+    Returns:
+        Which track IDs were added, which were skipped, and the backup path
+    """
+    device = await _open_device(device_path)
+    return await asyncio.to_thread(
+        device.add_tracks_to_playlist, playlist_id, track_ids
+    )
+
+
+@mcp.tool(
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": True,
+    }
+)
+async def set_device_track_field(
+    track_id: str, field: str, value: int, device_path: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Patch a numeric field on a track stored on a connected device.
+
+    Editable fields: rating (0-5), color_id (0-8), play_count, tempo (BPM * 100),
+    year, track_number, disc_number. Other fields are foreign keys or internal
+    bookkeeping and are rejected.
+
+    ⚠️ CAUTION: This modifies the export on your USB stick / SD card. A
+    timestamped backup is written next to export.pdb first.
+
+    Args:
+        track_id: Track ID (from search_device_tracks or get_device_playlist_tracks)
+        field: Field name to patch
+        value: New value
+        device_path: Device mount point. Optional when exactly one device is connected.
+
+    Returns:
+        The applied change and the backup path
+    """
+    device = await _open_device(device_path)
+    return await asyncio.to_thread(device.set_track_field, track_id, field, value)
+
+
 @mcp.resource("file://database-status")
 async def database_status() -> str:
     """Get the current database connection status."""

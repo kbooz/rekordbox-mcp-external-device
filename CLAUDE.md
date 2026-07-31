@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-An MCP server that provides Claude with direct read/write access to the rekordbox DJ software database. Built with FastMCP and pyrekordbox, it connects to rekordbox's encrypted SQLite (SQLCipher) database to expose 35 tools and 1 resource for searching tracks, importing new audio files, managing playlists, analyzing DJ history, computing library statistics, and reading rekordbox exports off USB sticks / SD cards.
+An MCP server that provides Claude with direct read/write access to the rekordbox DJ software database. Built with FastMCP and pyrekordbox, it connects to rekordbox's encrypted SQLite (SQLCipher) database to expose 38 tools and 1 resource for searching tracks, importing new audio files, managing playlists, analyzing DJ history, computing library statistics, and reading/writing rekordbox exports on USB sticks / SD cards.
 
 ## Commands
 
@@ -33,7 +33,7 @@ Four modules in `rekordbox_mcp/`:
 
 - **`database.py`** -- `RekordboxDatabase` class. Wraps pyrekordbox's `Rekordbox6Database` for encrypted SQLite access. Auto-detects the database path per platform (`~/Library/Pioneer` on macOS, `~/AppData/Roaming/Pioneer` on Windows). Lazy connection on first tool call. All queries filter soft-deleted records (`rb_local_deleted`). Mutation methods auto-create timestamped backups (`master_backup_YYYYMMDD_HHMMSS.db`) before writes.
 
-- **`device.py`** -- `DeviceDatabase` class. Read-only access to rekordbox exports on mounted USB sticks / SD cards (`PIONEER/rekordbox/export.pdb`), parsed with `rekordbox-pdb`. This is the DeviceSQL binary format the CDJs read — **not encrypted**, and completely separate from the local `master.db` (the `exportLibrary.db` next to it *is* encrypted, but CDJs don't use it). Scans platform mount points (`/Volumes`, drive letters, `/media`+`/mnt`), auto-selects when exactly one device is connected, and caches the parsed file per (path, mtime). Never writes — a device export is a rekordbox build artifact.
+- **`device.py`** -- `DeviceDatabase` class. Read-only access to rekordbox exports on mounted USB sticks / SD cards (`PIONEER/rekordbox/export.pdb`), parsed with `rekordbox-pdb`. This is the DeviceSQL binary format the CDJs read — **not encrypted**, and completely separate from the local `master.db` (the `exportLibrary.db` next to it *is* encrypted, but CDJs don't use it). Scans platform mount points (`/Volumes`, drive letters, `/media`+`/mnt`), auto-selects when exactly one device is connected, and caches the parsed file per (path, mtime). Writes go through `_write()`: timestamped backup (`export_backup_YYYYMMDD_HHMMSS.pdb`) → mutate via `rekordbox_pdb.edit.PdbEditor` → temp file + `os.replace` → re-parse to verify, restoring the backup if the result is unreadable or lost track rows. Only fields in `EDITABLE_TRACK_FIELDS` may be patched; everything else in a track row is a foreign key or bookkeeping.
 
 - **`models.py`** -- Pydantic models for Track, Playlist, HistorySession, HistoryTrack, SearchOptions, LibraryStats, HistoryStats. Validators handle date parsing and range constraints.
 
@@ -45,7 +45,8 @@ Four modules in `rekordbox_mcp/`:
 - Track search results default to limit=50, max=1000. The `get_genre_filepaths` tool returns only file paths for token efficiency.
 - Mutation tools (create_playlist, add_tracks_to_playlist, import_track, etc.) are annotated with `readOnlyHint=False`. Destructive tools (delete_playlist, remove_broken_tracks) have `destructiveHint=True`.
 - Smart playlists cannot be deleted (protected by validation).
-- Device tools (`list_devices`, `get_device_playlists`, `get_device_playlist_tracks`, `search_device_tracks`) read the USB/SD export, not the local library, so they need neither the encryption key nor rekordbox to be closed. `device_path` is optional when exactly one device is connected; with several mounted it raises rather than guess. Track `file_path` comes back as an absolute path on the mounted device.
+- Device tools read/write the USB/SD export, not the local library, so they need neither the encryption key nor rekordbox to be closed. Read: `list_devices`, `get_device_playlists`, `get_device_playlist_tracks`, `search_device_tracks`. Write (`readOnlyHint=False`): `create_device_playlist`, `add_tracks_to_device_playlist`, `set_device_track_field`. `device_path` is optional when exactly one device is connected; with several mounted it raises rather than guess. Track `file_path` comes back as an absolute path on the mounted device.
+- Device writes are replaced whenever rekordbox re-exports to that device, and `add_tracks_to_device_playlist` only links tracks already on the stick — it copies no audio and generates no ANLZ files. There is no delete: `PdbEditor` only appends rows and patches fixed-width fields.
 - Read-only tools work while rekordbox is open. Mutation tools require rekordbox to be closed — pyrekordbox's `commit()` blocks when it detects the running process.
 - An encryption key is required for database access; `setup-key.py` handles downloading/verifying it.
 - `import_track` / `import_tracks` wrap pyrekordbox's `add_content` and create Artist/Album/Genre/Label rows on demand via `_resolve_or_create`. Tracks are registered but **unanalyzed** — rekordbox itself must generate ANLZ files (waveforms/beatgrids/hot cues) via *Analyze Tracks*. Tag autofill uses `mutagen`; explicit tool args override tag values. Supported file types: mp3, m4a, flac, wav, aiff (from pyrekordbox's `FileType` enum).

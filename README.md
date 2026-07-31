@@ -37,6 +37,8 @@ A comprehensive Model Context Protocol (MCP) server for rekordbox database manag
 
 ### 💾 External Device Exports (USB / SD cards)
 - **Read Device Exports Directly**: Parse `PIONEER/rekordbox/export.pdb` on any mounted USB stick or SD card
+- **Write Back to the Device**: Create playlists, add tracks to them, and patch ratings/colors straight on the stick
+- **Backup on Every Write**: A timestamped `export_backup_*.pdb` is taken before each change, with automatic rollback if the result won't parse
 - **No Encryption Key Needed**: The device export is a plain binary format (DeviceSQL) — unlike the local library, it needs no key
 - **Works While rekordbox Is Open**: Device tools never touch the local database
 - **Full Playlist Tree**: Folders, playlists, and their tracks in the order the CDJ shows them
@@ -117,7 +119,7 @@ Add to your Claude Desktop configuration:
 }
 ```
 
-## Available Tools (35 tools + 1 resource)
+## Available Tools (38 tools + 1 resource)
 
 ### Search & Discovery
 - **`search_tracks`** - Advanced multi-field track search with filtering (genre, key, BPM, artist, title, rating, etc.)
@@ -168,10 +170,17 @@ Add to your Claude Desktop configuration:
 - **`get_device_playlists`** - Get the playlist tree (folders + playlists) from a device
 - **`get_device_playlist_tracks`** - Get a device playlist's tracks in DJ-visible order
 - **`search_device_tracks`** - Search a device's tracks by title, artist, album, or genre
+- **`create_device_playlist`** - Create a playlist or folder on the device ⚠️ (Mutation)
+- **`add_tracks_to_device_playlist`** - Append existing device tracks to a device playlist ⚠️ (Mutation)
+- **`set_device_track_field`** - Patch a numeric track field (rating, color_id, play_count, tempo, year, track_number, disc_number) ⚠️ (Mutation)
 
-> ℹ️ These read `PIONEER/rekordbox/export.pdb` on the mounted device — the DeviceSQL database the CDJs actually read. It is **not encrypted**, so these tools need no key and work while rekordbox is open. They are strictly read-only: a device export is a build artifact of rekordbox, and editing it in place would desync the device.
+> ℹ️ These read `PIONEER/rekordbox/export.pdb` on the mounted device — the DeviceSQL database the CDJs actually read. It is **not encrypted**, so these tools need no key and work while rekordbox is open.
 >
 > `device_path` is optional when exactly one device is connected. With several mounted, the tools raise rather than guess which stick you meant.
+
+> ⚠️ **About device writes.** Each write copies `export.pdb` to a timestamped `export_backup_*.pdb` beside it, writes through a temp file + rename (so a crash can't leave a half-written database), then re-parses the result and restores the backup if it is unreadable or lost track rows.
+>
+> Two limits worth knowing: **rekordbox regenerates the whole export on its next sync**, so edits made here are replaced the next time you export to the device; and `add_tracks_to_device_playlist` only links tracks that are *already* on the stick — it does not copy audio files or generate the ANLZ analysis (waveforms, beatgrids, hot cues) that players expect.
 
 ### Database Management
 - **`connect_database`** - Explicitly connect with optional custom database path
@@ -270,6 +279,16 @@ get_device_playlist_tracks(playlist_id="97", device_path="/Volumes/KBOOZ")
 
 # device_path can be omitted when only one device is connected
 search_device_tracks(query="daft punk", limit=10)
+
+# Build a set list straight on the stick — each call backs up export.pdb first
+new = create_device_playlist(name="Saturday Warmup")
+add_tracks_to_device_playlist(
+    playlist_id=new["playlist_id"],
+    track_ids=["285", "2162", "540"],
+)
+
+# Rate a track you just tested on the CDJ
+set_device_track_field(track_id="285", field="rating", value=5)
 ```
 
 ## Safety Features
@@ -292,7 +311,7 @@ rekordbox_mcp/
    __init__.py          # Package initialization
    server.py            # FastMCP server and tool definitions
    database.py          # Local library connection and operations (encrypted master.db)
-   device.py            # Read-only USB/SD export reader (export.pdb)
+   device.py            # USB/SD export access with backup-on-write (export.pdb)
    models.py            # Pydantic data models
 ```
 

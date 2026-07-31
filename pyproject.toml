@@ -24,12 +24,20 @@ dependencies = [
     "pydantic>=2.0.0",
     "loguru>=0.7.0",
     "mutagen>=1.47.0",
+    "rekordbox-pdb",
 ]
+
+# rekordbox-pdb reads the DeviceSQL export.pdb on USB/SD exports.
+# Not published to PyPI, so point uv at the source repo.
+[tool.uv.sources]
+rekordbox-pdb = { git = "https://github.com/fragmede/rekordbox-pdb", rev = "ee3bac2f22ca11a5ce61eea35f8cb951c246eaef" }
 
 [project.urls]
 Homepage = "https://github.com/davehenke/rekordbox-mcp"
 Repository = "https://github.com/davehenke/rekordbox-mcp"
 Issues = "https://github.com/davehenke/rekordbox-mcp/issues"
+Fork = "https://github.com/kbooz/rekordbox-mcp-external-device"
+"Fork Issues" = "https://github.com/kbooz/rekordbox-mcp-external-device/issues"
 
 [project.optional-dependencies]
 dev = [

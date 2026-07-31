@@ -13,6 +13,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from .database import RekordboxDatabase
+from .device import DeviceDatabase, find_devices
 from .models import (
     Track,
     Playlist,
@@ -911,6 +912,101 @@ async def remove_broken_tracks(track_ids: List[str]) -> Dict[str, Any]:
     await ensure_database_connected()
 
     return await db.remove_tracks_by_ids(track_ids)
+
+
+# Device Export Tools (USB sticks / SD cards)
+#
+# These read PIONEER/rekordbox/export.pdb on a mounted device instead of the
+# local rekordbox library, so they work regardless of whether rekordbox is open.
+
+
+async def _open_device(device_path: Optional[str]) -> DeviceDatabase:
+    """Open a device export off the event loop (parsing a .pdb is blocking I/O)."""
+    return await asyncio.to_thread(DeviceDatabase, device_path)
+
+
+@mcp.tool()
+async def list_devices() -> List[Dict[str, Any]]:
+    """
+    List connected USB sticks / SD cards that contain a rekordbox export.
+
+    Scans mounted volumes for PIONEER/rekordbox/export.pdb -- the database
+    CDJs actually read. Use the returned "path" as device_path in the other
+    device tools.
+
+    Returns:
+        List of devices with name, mount path, and track/playlist counts
+    """
+    devices = await asyncio.to_thread(find_devices)
+
+    results: List[Dict[str, Any]] = []
+    for device in devices:
+        try:
+            summary = (await _open_device(device["path"])).summary()
+        except Exception as e:
+            # A corrupt or half-written export shouldn't hide the other devices
+            summary = {**device, "error": str(e)}
+        results.append(summary)
+
+    return results
+
+
+@mcp.tool()
+async def get_device_playlists(
+    device_path: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Get the playlist tree from a connected device export.
+
+    Args:
+        device_path: Device mount point (e.g. "/Volumes/KBOOZ"). Optional when
+            exactly one rekordbox device is connected.
+
+    Returns:
+        List of playlists and folders, with parent_id linking them into a tree
+    """
+    device = await _open_device(device_path)
+    return [playlist.model_dump() for playlist in device.playlists]
+
+
+@mcp.tool()
+async def get_device_playlist_tracks(
+    playlist_id: str, device_path: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    Get the tracks of a playlist on a connected device, in DJ-visible order.
+
+    Args:
+        playlist_id: Playlist ID from get_device_playlists
+        device_path: Device mount point. Optional when exactly one device is connected.
+
+    Returns:
+        List of tracks, with file_path pointing at the file on the device
+    """
+    device = await _open_device(device_path)
+    return [track.model_dump() for track in device.playlist_tracks(playlist_id)]
+
+
+@mcp.tool()
+async def search_device_tracks(
+    query: str = "", device_path: Optional[str] = None, limit: int = 50
+) -> List[Dict[str, Any]]:
+    """
+    Search tracks on a connected device export.
+
+    Matches a substring against title, artist, album and genre. An empty query
+    returns the first `limit` tracks on the device.
+
+    Args:
+        query: Search text
+        device_path: Device mount point. Optional when exactly one device is connected.
+        limit: Maximum number of results
+
+    Returns:
+        List of matching tracks
+    """
+    device = await _open_device(device_path)
+    return [track.model_dump() for track in device.search(query, limit)]
 
 
 @mcp.resource("file://database-status")

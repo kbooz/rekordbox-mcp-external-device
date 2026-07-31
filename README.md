@@ -4,6 +4,8 @@ A comprehensive Model Context Protocol (MCP) server for rekordbox database manag
 
 **Built using [pyrekordbox](https://github.com/dylanljones/pyrekordbox)** - This project is not affiliated with the pyrekordbox project or its maintainers.
 
+> **Fork note:** [kbooz/rekordbox-mcp-external-device](https://github.com/kbooz/rekordbox-mcp-external-device) extends the upstream project with access to **rekordbox exports on external devices** — the USB sticks and SD cards you take to the club — using [rekordbox-pdb](https://github.com/fragmede/rekordbox-pdb). See [External Device Exports](#-external-device-exports-usb--sd-cards).
+
 <a href="https://glama.ai/mcp/servers/@davehenke/rekordbox-mcp">
   <img width="380" height="200" src="https://glama.ai/mcp/servers/@davehenke/rekordbox-mcp/badge" alt="rekordbox-mcp MCP server" />
 </a>
@@ -33,10 +35,18 @@ A comprehensive Model Context Protocol (MCP) server for rekordbox database manag
 - **History Analysis**: Access complete DJ session history and performance data
 - **Library Statistics**: Comprehensive analytics and insights
 
+### 💾 External Device Exports (USB / SD cards)
+- **Read Device Exports Directly**: Parse `PIONEER/rekordbox/export.pdb` on any mounted USB stick or SD card
+- **No Encryption Key Needed**: The device export is a plain binary format (DeviceSQL) — unlike the local library, it needs no key
+- **Works While rekordbox Is Open**: Device tools never touch the local database
+- **Full Playlist Tree**: Folders, playlists, and their tracks in the order the CDJ shows them
+- **Auto-Detection**: Finds connected devices across macOS, Windows, and Linux mount points
+
 ## Architecture
 
 - **FastMCP Framework**: Modern Python MCP server using FastMCP 2.0
 - **pyrekordbox Integration**: Mature library for encrypted database access
+- **rekordbox-pdb Integration**: Parses the DeviceSQL `export.pdb` format used on USB/SD exports
 - **Real-time Database Queries**: Direct SQLite operations with SQLCipher support
 - **Production Ready**: Built-in logging, error handling, and safety features
 
@@ -107,7 +117,7 @@ Add to your Claude Desktop configuration:
 }
 ```
 
-## Available Tools (31 tools + 1 resource)
+## Available Tools (35 tools + 1 resource)
 
 ### Search & Discovery
 - **`search_tracks`** - Advanced multi-field track search with filtering (genre, key, BPM, artist, title, rating, etc.)
@@ -152,6 +162,16 @@ Add to your Claude Desktop configuration:
 - **`find_broken_tracks`** - Scan for missing files, Apple Music streams, empty paths, and orphaned playlist refs
 - **`cleanup_orphaned_playlist_entries`** - Remove stale playlist entries referencing deleted tracks ⚠️ (Mutation)
 - **`remove_broken_tracks`** - Soft-delete tracks by ID and remove from all playlists ⚠️ (Destructive)
+
+### External Device Exports (USB / SD cards)
+- **`list_devices`** - List connected devices containing a rekordbox export, with track/playlist counts
+- **`get_device_playlists`** - Get the playlist tree (folders + playlists) from a device
+- **`get_device_playlist_tracks`** - Get a device playlist's tracks in DJ-visible order
+- **`search_device_tracks`** - Search a device's tracks by title, artist, album, or genre
+
+> ℹ️ These read `PIONEER/rekordbox/export.pdb` on the mounted device — the DeviceSQL database the CDJs actually read. It is **not encrypted**, so these tools need no key and work while rekordbox is open. They are strictly read-only: a device export is a build artifact of rekordbox, and editing it in place would desync the device.
+>
+> `device_path` is optional when exactly one device is connected. With several mounted, the tools raise rather than guess which stick you meant.
 
 ### Database Management
 - **`connect_database`** - Explicitly connect with optional custom database path
@@ -235,6 +255,23 @@ add_tracks_to_playlist(
 # Then open rekordbox and run Analyze Tracks on that playlist.
 ```
 
+### Reading an External Device
+```python
+# See which USB sticks / SD cards are connected
+list_devices()
+# -> [{"name": "KBOOZ", "path": "/Volumes/KBOOZ",
+#      "total_tracks": 2175, "total_playlists": 70, "total_folders": 29}]
+
+# Browse the playlist tree on that device
+get_device_playlists(device_path="/Volumes/KBOOZ")
+
+# Get a playlist's tracks in the order the CDJ displays them
+get_device_playlist_tracks(playlist_id="97", device_path="/Volumes/KBOOZ")
+
+# device_path can be omitted when only one device is connected
+search_device_tracks(query="daft punk", limit=10)
+```
+
 ## Safety Features
 
 - **Automatic Backups**: All mutation operations create automatic database backups before changes
@@ -254,7 +291,8 @@ add_tracks_to_playlist(
 rekordbox_mcp/
    __init__.py          # Package initialization
    server.py            # FastMCP server and tool definitions
-   database.py          # Database connection and operations
+   database.py          # Local library connection and operations (encrypted master.db)
+   device.py            # Read-only USB/SD export reader (export.pdb)
    models.py            # Pydantic data models
 ```
 

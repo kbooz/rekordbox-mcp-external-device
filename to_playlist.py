@@ -8,14 +8,16 @@ imported -- the ones already in the collection are skipped. So capture the names
 first and resolve them here, and the playlist ends up with the whole folder,
 new and old alike.
 
-Matches on basename, NFC-normalised and lowercased, because that is the one
-thing ingest preserves: it never renames a file (see AGENTS.md).
+Matches on basename (NFC, lowercased) since ingest never renames, then on the
+same name with ingest's " (2)" collision suffix, then on the file's own
+artist+title tags -- the last one needs the line to be a readable path, so feed
+it full paths.
 
 Dry-run by default -- nothing is written until ``--apply`` is passed, and the
 rekordbox app has to be closed for that.
 
 Usage:
-    ls ~/Music/Downloader/"Warmup BK 4" > /tmp/names.txt
+    find ~/Music/Downloader/"Warmup BK 4" -type f > /tmp/names.txt
     uv run python ingest.py --apply
     uv run python to_playlist.py "Warmup BK #4" < /tmp/names.txt
     uv run python to_playlist.py "Warmup BK #4" --parent 67134214 --apply < /tmp/names.txt
@@ -25,13 +27,21 @@ Usage:
 import argparse
 import collections
 import os
+import re
 import sys
 import unicodedata
 
 from pyrekordbox.db6 import Rekordbox6Database
 
+from ingest import normalise, read_tags
+
 DB_DIR = os.path.expanduser("~/Library/Pioneer/rekordbox")
 AUDIO_EXT = (".mp3", ".m4a", ".flac", ".wav", ".aiff", ".aif")
+
+# The one rename ingest.py does: " (2)" before the extension when the artist
+# folder already holds that filename. Match it back or the archived copy looks
+# like a track that was never imported.
+COPY_SUFFIX = re.compile(r" \(\d+\)(?=\.[^.]+$)")
 
 
 def key(name: str) -> str:
@@ -39,21 +49,41 @@ def key(name: str) -> str:
     return unicodedata.normalize("NFC", os.path.basename(name.strip())).lower()
 
 
-def index_collection(db: Rekordbox6Database) -> dict[str, list[str]]:
-    """basename -> content IDs. A list, because two artist folders can hold the
-    same filename and picking one at random would be a silent wrong track."""
-    index: dict[str, list[str]] = collections.defaultdict(list)
+def base_key(name: str) -> str:
+    return COPY_SUFFIX.sub("", key(name))
+
+
+def index_collection(db: Rekordbox6Database):
+    """-> (exact basename index, copy-suffix-stripped index, artist+title index),
+    each key mapping to a list of content IDs: two artist folders can hold the
+    same filename, and picking one at random would be a silent wrong track."""
+    exact: dict[str, list[str]] = collections.defaultdict(list)
+    stripped: dict[str, list[str]] = collections.defaultdict(list)
+    tagged: dict[str, list[str]] = collections.defaultdict(list)
     for content in db.get_content():
-        if content.FolderPath:
-            index[key(content.FolderPath)].append(str(content.ID))
-    return index
+        if not content.FolderPath:
+            continue
+        exact[key(content.FolderPath)].append(str(content.ID))
+        stripped[base_key(content.FolderPath)].append(str(content.ID))
+        artist = content.Artist.Name if content.Artist else ""
+        tagged[normalise(artist, content.Title)].append(str(content.ID))
+    return exact, stripped, tagged
 
 
-def resolve(names: list[str], index: dict[str, list[str]]):
-    """-> (ids in input order, missing names, ambiguous names)."""
+def resolve(names: list[str], exact: dict, stripped: dict, tagged: dict = None):
+    """-> (ids in input order, missing names, ambiguous names).
+
+    Exact name wins; the stripped index is the fallback so that a real file
+    named "... (2).mp3" is not made ambiguous by its own unsuffixed twin. Last
+    resort is artist+title off the file's own tags, which catches the copy the
+    collection filed under a differently ordered name -- that only works for a
+    line that is a readable path, so feed this full paths, not bare names.
+    """
     ids, missing, ambiguous = [], [], []
     for name in names:
-        found = index.get(key(name), [])
+        found = exact.get(key(name)) or stripped.get(base_key(name), [])
+        if not found and tagged and os.path.isfile(name):
+            found = tagged.get(normalise(*read_tags(name)), [])
         if not found:
             missing.append(name)
         elif len(found) > 1:
@@ -72,12 +102,27 @@ def find_playlist(db: Rekordbox6Database, name: str):
 
 
 def selftest() -> int:
-    index = {"músicá.mp3": ["1"], "dois.mp3": ["2", "3"]}
-    decomposed = unicodedata.normalize("NFD", "/some/dir/MÚSICÁ.mp3")
-    ids, missing, ambiguous = resolve([decomposed, "dois.mp3", "nada.mp3"], index)
-    assert ids == ["1"], ids
+    exact = {"músicá.mp3": ["1"], "dois.mp3": ["2", "3"], "só copia (2).mp3": ["4"]}
+    stripped = {"músicá.mp3": ["1"], "dois.mp3": ["2", "3"], "só copia.mp3": ["4"]}
+    ids, missing, ambiguous = resolve(
+        [
+            unicodedata.normalize("NFD", "/some/dir/MÚSICÁ.mp3"),  # NFD input, NFC index
+            "só copia.mp3",  # landing-zone name, archived as "(2)"
+            "dois.mp3",
+            "nada.mp3",
+        ],
+        exact,
+        stripped,
+    )
+    assert ids == ["1", "4"], ids
     assert missing == ["nada.mp3"], missing
     assert ambiguous == ["dois.mp3"], ambiguous
+
+    # a file genuinely named "(2)" must not be dragged into its twin's ambiguity
+    twins_exact = {"x (2).mp3": ["9"], "x.mp3": ["8"]}
+    twins_stripped = {"x.mp3": ["8", "9"]}
+    ids, missing, ambiguous = resolve(["x (2).mp3", "x.mp3"], twins_exact, twins_stripped)
+    assert (ids, missing, ambiguous) == (["9", "8"], [], []), (ids, missing, ambiguous)
     print("selftest ok")
     return 0
 
@@ -101,7 +146,7 @@ def main() -> int:
         return 1
 
     db = Rekordbox6Database(db_dir=DB_DIR)
-    ids, missing, ambiguous = resolve(names, index_collection(db))
+    ids, missing, ambiguous = resolve(names, *index_collection(db))
 
     playlist = find_playlist(db, args.playlist)
     existing = set()

@@ -51,6 +51,27 @@ Four modules in `rekordbox_mcp/`:
 - An encryption key is required for database access; `setup-key.py` handles downloading/verifying it.
 - `import_track` / `import_tracks` wrap pyrekordbox's `add_content` and create Artist/Album/Genre/Label rows on demand via `_resolve_or_create`. Tracks are registered but **unanalyzed** — rekordbox itself must generate ANLZ files (waveforms/beatgrids/hot cues) via *Analyze Tracks*. Tag autofill uses `mutagen`; explicit tool args override tag values. Supported file types: mp3, m4a, flac, wav, aiff (from pyrekordbox's `FileType` enum).
 
+## Standalone Scripts
+
+Three scripts at the repo root drive kbooz's library on `/Volumes/KBOOZHD` (see
+that drive's `AGENTS.md`). They talk to pyrekordbox directly, not through MCP, and
+all default to a dry-run — nothing is written until `--apply`, with rekordbox closed.
+
+- **`ingest.py`** — drains the landing zones (`~/Music/Downloader`,
+  `Music/Downloads`), dedupes against the whole collection, files survivors under
+  `Music/Artists/<Artist>/`, registers them with their tags, and only then deletes
+  the source. **This is the only thing that archives.** `import_track` /
+  `import_tracks` register the file wherever it already sits — they move nothing,
+  so pointing them at a landing-zone file leaves a path that breaks when the zone
+  is emptied. Import goes through `ingest.py`; MCP is for playlists and queries.
+- **`to_playlist.py`** — reads filenames on stdin, resolves them against the
+  collection by basename (NFC, lowercased) and puts them in a playlist, creating
+  it if needed. Capture the folder listing *before* running ingest: ingest deletes
+  the source folder, and tracks already in the collection are skipped without a
+  trace, so a listing taken afterwards would yield only the new arrivals.
+- **`restore_from_usb.py`** — recovers cues and beatgrids from a USB export's
+  `PIONEER/USBANLZ` back into `master.db`.
+
 ## Database Tables (via pyrekordbox)
 
 `Content` (tracks), `Playlist`, `PlaylistSong` (playlist-track join), `History` (DJ sessions), `HistorySong` (history-track join). Playlist folders use `Attribute=1`.

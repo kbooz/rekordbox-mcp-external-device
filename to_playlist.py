@@ -61,7 +61,9 @@ def index_collection(db: Rekordbox6Database):
     stripped: dict[str, list[str]] = collections.defaultdict(list)
     tagged: dict[str, list[str]] = collections.defaultdict(list)
     for content in db.get_content():
-        if not content.FolderPath:
+        # get_content() still hands back soft-deleted rows; left in, a removed
+        # track collides with its live replacement and both look ambiguous.
+        if not content.FolderPath or getattr(content, "rb_local_deleted", 0):
             continue
         exact[key(content.FolderPath)].append(str(content.ID))
         stripped[base_key(content.FolderPath)].append(str(content.ID))

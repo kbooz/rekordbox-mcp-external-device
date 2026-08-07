@@ -79,7 +79,15 @@ class RekordboxDatabase:
             raise RuntimeError(f"Database connection failed: {str(e)}")
 
     def _detect_database_path(self) -> Path:
-        """Auto-detect the rekordbox database location based on OS."""
+        """Auto-detect the rekordbox database location based on OS.
+
+        Returns the ``rekordbox`` subdirectory, not its parent. pyrekordbox
+        connects either way, but from the parent it resolves masterPlaylists6.xml
+        and the ANLZ root one level too high: playlist_xml comes back None, so
+        create_playlist writes a playlist the app's sidebar never shows, and
+        update_content_path raises FileNotFoundError on the ANLZ after the file
+        has already been moved.
+        """
         if os.name == "nt":  # Windows
             base_path = Path.home() / "AppData" / "Roaming" / "Pioneer"
         elif sys.platform == "darwin":  # macOS
@@ -89,6 +97,12 @@ class RekordboxDatabase:
 
         if not base_path.exists():
             raise FileNotFoundError(f"Rekordbox directory not found at {base_path}")
+
+        # rekordbox 6/7 keep everything under Pioneer/rekordbox; older layouts
+        # put master.db straight in Pioneer, so only descend when it is there.
+        nested = base_path / "rekordbox"
+        if (nested / "master.db").is_file():
+            return nested
 
         return base_path
 

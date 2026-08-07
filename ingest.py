@@ -123,6 +123,10 @@ class Collection:
         self.by_size: dict[int, list[str]] = collections.defaultdict(list)
         self.sizes_by_title: dict[str, list[int]] = collections.defaultdict(list)
         for content in db.get_content():
+            # get_content() still hands back soft-deleted rows -- a track the
+            # user removed from rekordbox must not block its re-import.
+            if getattr(content, "rb_local_deleted", 0):
+                continue
             path = content.FolderPath or ""
             if not path or not os.path.exists(path):
                 continue
